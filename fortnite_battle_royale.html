@@ -332,6 +332,8 @@
   #useFill{background:linear-gradient(90deg,#8dffc2,#2bd671);}
   #stormVignette{position:absolute;inset:0;opacity:0;transition:opacity .5s;
     box-shadow:inset 0 0 180px 60px rgba(150,60,255,.55);}
+  #dmgVignette{position:absolute;inset:0;opacity:0;transition:opacity .35s;
+    background:radial-gradient(ellipse at center,rgba(255,0,0,0) 52%,rgba(190,15,25,.55) 100%);}
   #dropHint{position:absolute;left:50%;top:20%;transform:translateX(-50%);display:none;
     font-size:13px;font-weight:900;letter-spacing:3px;color:#fff;
     text-shadow:0 2px 8px #000;text-align:center;line-height:2;}
@@ -354,6 +356,7 @@
   <div id="interactPrompt"><b>E</b><span id="interactText">OPEN CHEST</span></div>
   <div id="useWrap"><div class="bar-label" id="useLabel">USING</div><div class="bar"><div id="useFill" class="fill"></div></div></div>
   <div id="stormVignette"></div>
+  <div id="dmgVignette"></div>
   <div id="dropHint"></div>
   <div id="scorebar">
     <span class="pname you">YOU</span>
@@ -671,6 +674,8 @@ dLight.shadow.camera.top=28; dLight.shadow.camera.bottom=-28;
 dLight.shadow.bias=-0.00025;
 dLight.shadow.normalBias=0.025;
 scene.add(dLight);
+dLight.target.position.set(0,0,0);
+scene.add(dLight.target);
 const dLight2=new THREE.DirectionalLight(0x8bc9ff,0.42); dLight2.position.set(18,12,-22); scene.add(dLight2);
 const pLight=new THREE.PointLight(0xffe3ac,0.35,42); pLight.position.set(0,10,0); scene.add(pLight);
 
@@ -703,6 +708,25 @@ const skyDome=new THREE.Mesh(
 );
 skyDome.frustumCulled=false;
 scene.add(skyDome);
+
+/* sun sprite — a big soft glow in the direction of the key light */
+const SUN_DIR=V(-0.55,0.55,0.42).normalize();
+function makeSunTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=256;
+  const g=c.getContext('2d');
+  const grad=g.createRadialGradient(128,128,8,128,128,120);
+  grad.addColorStop(0,'rgba(255,250,230,1)');
+  grad.addColorStop(0.18,'rgba(255,238,180,0.95)');
+  grad.addColorStop(0.45,'rgba(255,220,140,0.32)');
+  grad.addColorStop(1,'rgba(255,210,120,0)');
+  g.fillStyle=grad; g.fillRect(0,0,256,256);
+  return new THREE.CanvasTexture(c);
+}
+const sunSprite=new THREE.Sprite(new THREE.SpriteMaterial({
+  map:makeSunTexture(),transparent:true,depthWrite:false,depthTest:false,opacity:0.95}));
+sunSprite.scale.set(64,64,1);
+sunSprite.renderOrder=999;
+scene.add(sunSprite);
 
 const distantScenery=new THREE.Group();
 scene.add(distantScenery);
@@ -880,6 +904,7 @@ floorMesh.position.y=-0.2; floorMesh.receiveShadow=true; scene.add(floorMesh);
 const ceilMesh=new THREE.Mesh(new THREE.BoxGeometry(20,0.4,20),arenaMat(5,5,0x10406e));
 ceilMesh.position.y=AY+0.2; ceilMesh.visible=false; scene.add(ceilMesh);
 const ARENA_MESHES=[floorMesh];
+ARENA_MESHES.push(distantScenery); // whole backdrop hidden in Battle Royale
 const wallMatX=arenaMat(5,3), wallMatZ=arenaMat(5,3);
 for(const wallMat of [wallMatX,wallMatZ]){
   wallMat.transparent=true; wallMat.opacity=0.42; wallMat.depthWrite=false;
@@ -1353,11 +1378,20 @@ function computePlacement(origin,forward,feetY,type){
 
     if(yaw === Math.PI/2){
       const x0=-10+cx*4, x1=x0+4;
-      const wx=forward.x>0?x0:x1;
+      let wx=forward.x>0?x0:x1;
+      /* same anti-wall-in-face rule as the free-placement solver */
+      if(Math.abs(player.pos.x-wx)<1.35){
+        const wx2=wx+Math.sign(forward.x)*4;
+        if(forward.x!==0&&wx2>=-9.99&&wx2<=9.99) wx=wx2;
+      }
       pos=new THREE.Vector3(wx,y,ccz);
     } else {
       const z0=-10+cz*4, z1=z0+4;
-      const wz=forward.z>0?z0:z1;
+      let wz=forward.z>0?z0:z1;
+      if(Math.abs(player.pos.z-wz)<1.35){
+        const wz2=wz+Math.sign(forward.z)*4;
+        if(forward.z!==0&&wz2>=-9.99&&wz2<=9.99) wz=wz2;
+      }
       pos=new THREE.Vector3(ccx,y,wz);
     }
   }else if(type==='floor'){
@@ -1413,11 +1447,22 @@ function computePlacementFree(origin,forward,feetY,type){
     }
     if(yaw === Math.PI/2){
       const x0=cx*4, x1=x0+4;
-      const wx=forward.x>0?x0:x1;
+      let wx=forward.x>0?x0:x1;
+      /* if the aim ray hit inside the player's own cell the wall would land
+         on the boundary flush against them and be rejected — push it one
+         cell further out in the facing direction instead */
+      if(Math.abs(player.pos.x-wx)<1.35){
+        const wx2=wx+Math.sign(forward.x)*4;
+        if(forward.x!==0) wx=wx2;
+      }
       pos=new THREE.Vector3(wx,y,ccz);
     } else {
       const z0=cz*4, z1=z0+4;
-      const wz=forward.z>0?z0:z1;
+      let wz=forward.z>0?z0:z1;
+      if(Math.abs(player.pos.z-wz)<1.35){
+        const wz2=wz+Math.sign(forward.z)*4;
+        if(forward.z!==0) wz=wz2;
+      }
       pos=new THREE.Vector3(ccx,y,wz);
     }
   }else if(type==='floor'){
@@ -2121,6 +2166,7 @@ function firePlayerWeapon(){
     return;
   }
 
+  if(!isPick) flashMuzzle(muzzle);
   const dmgMul=(MODE==='br'&&curItem())?RARITY[curItem().rarity].m:1;
   const adsMul = rightDown ? 0.4 : 1.0;
   const moveMul = player.onGround ? (Math.hypot(player.vel.x,player.vel.z)>1 ? 1.35 : 1.0) : 1.9;
@@ -2731,6 +2777,13 @@ const buildSlotEls=[...document.querySelectorAll('.build-slot')];
 const chT=document.querySelector('.ch-t'), chB=document.querySelector('.ch-b'),
       chL=document.querySelector('.ch-l'), chR=document.querySelector('.ch-r');
 
+function applyDamageVignette(){
+  const dv=document.getElementById('dmgVignette');
+  if(!dv) return;
+  const f=(player.alive&&player.hp<35)?(1-player.hp/35):0;
+  dv.style.opacity=f.toFixed(2);
+}
+
 let hudTick=0;
 function updateHUD(force){
   if(!force){ hudTick++; if(hudTick%3!==0) return; }
@@ -2742,6 +2795,7 @@ function updateHUD(force){
   shNum.textContent=Math.ceil(clamp(player.shield,0,100));
   stNum.textContent=Math.ceil(clamp(player.stamina,0,100));
   matNum.textContent=player.mats;
+  applyDamageVignette();
   if(ammoDisp){
     if(!buildMode && player.weapon<2){
       const a=player.ammo[player.weapon], r=player.reserve[player.weapon];
@@ -3021,7 +3075,7 @@ window.addEventListener('keydown',e=>{
   else if(act==='interact'){ if(MODE==='br') doInteract(); }
   else if(act==='wall'||act==='ramp'||act==='floor'||act==='cone') toggleBuild(act);
   else if(act==='edit') handleEditKey();
-  else if(act==='resetEdit'){ if(editTarget) resetFullEdit(); else if(preEdit) confirmPreEdit(); else if(player.alive&&player.weapon<2) startReload(); }
+  else if(act==='resetEdit'){ if(editTarget) resetFullEdit(); else if(preEdit) confirmPreEdit(); else if(player.alive) startReload(); }
   else if(k==='z' && buildMode) { buildMat = (buildMat + 1) % 3; SFX.edit(); updateHUD(true); }
   else if(act==='clearBuilds'){
     if(settings.freebuild){ clearStructures(); SFX.collapse(); }
@@ -3620,6 +3674,15 @@ document.addEventListener('mouseup',e=>{
 });
 document.addEventListener('contextmenu',e=>e.preventDefault());
 
+/* release every held input when the tab loses focus (prevents stuck keys) */
+function releaseAllInput(){
+  mouseDown=false; rightDown=false; fireRequest=false;
+  editDragging=false;
+  for(const k in keys) keys[k]=false;
+}
+window.addEventListener('blur',releaseAllInput);
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) releaseAllInput(); });
+
 function onLeftClick(e){
   if(!state.roundActive||!player.alive) return;
   if(preEdit){ preEditClick(); return; }
@@ -3691,7 +3754,25 @@ function updateStructures(dt){
   }
 }
 
+/* muzzle flash */
+let muzzleFlash=null,muzzleFlashLife=0;
+function flashMuzzle(pos){
+  if(!muzzleFlash){
+    muzzleFlash=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex(),color:0xffc85e,
+      transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending}));
+    muzzleFlash.scale.set(1.1,1.1,1);
+    scene.add(muzzleFlash);
+  }
+  muzzleFlash.position.copy(pos);
+  muzzleFlash.material.opacity=0.95;
+  muzzleFlashLife=0.055;
+}
+
 function updateEffects(dt){
+  if(muzzleFlash&&muzzleFlashLife>0){
+    muzzleFlashLife-=dt;
+    muzzleFlash.material.opacity=Math.max(0,muzzleFlashLife/0.055)*0.95;
+  }
   for(const t of tracerPool){
     if(t.free) continue;
     t.life-=dt;
@@ -4044,10 +4125,21 @@ function renderFrame(dt){
    ===================================================================== */
 let lastT=performance.now();
 
+function updateWorldLights(){
+  /* sun glow always on the horizon from the camera's view */
+  sunSprite.position.copy(camera.position).addScaledVector(SUN_DIR,170);
+  /* in Battle Royale the whole island needs shadows, so trail the player */
+  if(MODE==='br'){
+    dLight.position.set(player.pos.x-22,34,player.pos.z+18);
+    dLight.target.position.set(player.pos.x,0,player.pos.z);
+  }
+}
+
 function animate(now){
   requestAnimationFrame(animate);
   const raw=Math.min((now-lastT)/1000,0.25);
   lastT=now;
+  updateWorldLights();
 
   /* pre-edit does NOT pause gameplay — it's a hold-while-customizing overlay */
   const active=state.running&&!settingsModalOpen;
@@ -4402,6 +4494,7 @@ let brBus=null;
 let brInteract=null;
 let brEndWin=false;
 let brEndShown=false;
+let brWaterMesh=null;
 let brVMs=null;
 
 /* ---------------- terrain ---------------- */
@@ -4586,8 +4679,41 @@ function makeBuilding(cx,cz,baseY,w,d,color){
   brWallBox(g,(doorW/2+seg/2),H/2,d/2,seg,H,T,color);
   brWallBox(g,-w/2,H/2,0,T,H,d,color);
   brWallBox(g,w/2,H/2,0,T,H,d,color);
+  /* roof */
   brWallBox(g,0,H+0.15,0,w+0.6,0.3,d+0.6,0x5a4636);
+  /* door frame (visual, no collider) */
+  const trimMat=new THREE.MeshStandardMaterial({color:0x4a3826,roughness:0.8});
+  const frameL=new THREE.Mesh(new THREE.BoxGeometry(0.14,2.6,0.34),trimMat);
+  frameL.position.set(-doorW/2-0.07,2.1,d/2); frameL.castShadow=true; g.add(frameL);
+  const frameR=frameL.clone(); frameR.position.x=doorW/2+0.07; g.add(frameR);
+  const frameT=new THREE.Mesh(new THREE.BoxGeometry(doorW+0.28,0.16,0.34),trimMat);
+  frameT.position.set(0,2.6,d/2); frameT.castShadow=true; g.add(frameT);
+  const door=new THREE.Mesh(new THREE.BoxGeometry(doorW,2.4,0.1),trimMat);
+  door.position.set(0,2.4,d/2); g.add(door);
+  /* windows: dark inset panels on side walls (visual only) */
+  const winMat=new THREE.MeshStandardMaterial({color:0x223644,roughness:0.25,metalness:0.2,
+    emissive:0x0d1a22,emissiveIntensity:0.5});
+  for(const zs of [-1,1]){
+    const nw=Math.max(1,Math.floor(w/4));
+    for(let i=0;i<nw;i++){
+      const win=new THREE.Mesh(new THREE.BoxGeometry(1.2,1.0,0.12),winMat);
+      win.position.set(-w/2+(i+0.5)*(w/nw),2.55,zs*(d/2-0.12));
+      win.castShadow=true; g.add(win);
+    }
+  }
+  /* deco props: chimney + AC box on some buildings */
+  if(Math.random()<0.5){
+    const chimney=new THREE.Mesh(new THREE.BoxGeometry(0.8,1.7,0.8),
+      new THREE.MeshStandardMaterial({color:0x6e5240,roughness:0.9}));
+    chimney.position.set(w/2-1,H+0.9,d/2-1); chimney.castShadow=true; g.add(chimney);
+  }
+  if(Math.random()<0.5){
+    const ac=new THREE.Mesh(new THREE.BoxGeometry(1.2,0.7,1.0),
+      new THREE.MeshStandardMaterial({color:0x9aa8ac,roughness:0.5,metalness:0.4}));
+    ac.position.set(-w/2+1.2,H+0.45,-d/2+1.2); ac.castShadow=true; g.add(ac);
+  }
   if(Math.random()<0.45){
+    /* second storey */
     brWallBox(g,0,H*2+0.15,0,w+0.6,0.3,d+0.6,0x5a4636);
     brWallBox(g,-w/2+0.2,H*1.5,0,T,H,d*0.55,color);
     brWallBox(g,w/2-0.2,H*1.5,0,T,H,d*0.55,color);
@@ -4628,15 +4754,29 @@ function buildVegetation(){
     const g=new THREE.Group();
     g.position.set(x,h,z);
     const th=rand(4.5,7);
-    const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.45,th,6),
+    const hueJ=rand(-0.035,0.045);
+    const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.48,th,6),
       new THREE.MeshStandardMaterial({color:0x6e4f2e,roughness:1}));
     trunk.position.y=th/2; trunk.castShadow=true;
     g.add(trunk);
-    const leafMat=new THREE.MeshStandardMaterial({color:0x3f7d33,roughness:1});
-    for(let l=0;l<2;l++){
-      const cone=new THREE.Mesh(new THREE.ConeGeometry(2.4-l*0.8,3,7),leafMat);
-      cone.position.y=th-1+l*1.8; cone.castShadow=true;
-      g.add(cone);
+    const leafHue=new THREE.Color(0x3f7d33);
+    leafHue.offsetHSL(hueJ,rand(-0.08,0.1),rand(-0.05,0.05));
+    const leafMat=new THREE.MeshStandardMaterial({color:leafHue,roughness:1});
+    if(Math.random()<0.55){
+      /* pine: stacked cones */
+      for(let l=0;l<3;l++){
+        const cone=new THREE.Mesh(new THREE.ConeGeometry(2.5-l*0.7,2.6,7),leafMat);
+        cone.position.y=th-1.4+l*1.85; cone.rotation.y=rand(0,3); cone.castShadow=true;
+        g.add(cone);
+      }
+    }else{
+      /* broadleaf: round canopy blobs */
+      for(let l=0;l<3;l++){
+        const blob=new THREE.Mesh(new THREE.SphereGeometry(1.5-l*0.28,8,6),leafMat);
+        blob.position.set(rand(-0.6,0.6),th-1.0+l*0.95,rand(-0.6,0.6));
+        blob.scale.y=0.82; blob.castShadow=true;
+        g.add(blob);
+      }
     }
     brWorld.add(g);
     brHarvest.push({group:g,min:V(x-0.5,h,z-0.5),max:V(x+0.5,h+th,z+0.5),hp:220,mat:0,type:'tree',dead:false});
@@ -4649,9 +4789,10 @@ function buildVegetation(){
     const h=terrainH(x,z);
     if(h<0.3) continue;
     const s=rand(0.9,2.1);
+    const rc=new THREE.Color(0x8d9298); rc.offsetHSL(rand(-0.02,0.02),rand(-0.06,0),rand(-0.08,0.04));
     const rock=new THREE.Mesh(new THREE.DodecahedronGeometry(s,0),
-      new THREE.MeshStandardMaterial({color:0x8d9298,roughness:1}));
-    rock.position.set(x,h+s*0.5,z);
+      new THREE.MeshStandardMaterial({color:rc,roughness:1,flatShading:true}));
+    rock.position.set(x,h+s*0.34,z);
     rock.rotation.set(rand(0,3),rand(0,3),rand(0,3));
     rock.castShadow=true;
     brWorld.add(rock);
@@ -4670,6 +4811,49 @@ function buildVegetation(){
       brWorld.add(crate);
       brHarvest.push({group:crate,min:V(x-0.8,crate.position.y-0.75,z-0.8),max:V(x+0.8,crate.position.y+0.75,z+0.8),hp:180,mat:2,type:'crate',dead:false});
     }
+  }
+  /* bushes: small leafy clusters */
+  let gb=0,gt=0;
+  while(gb<80&&gt<400){
+    gt++;
+    const x=rand(-BR_WORLD_R*0.88,BR_WORLD_R*0.88),z=rand(-BR_WORLD_R*0.88,BR_WORLD_R*0.88);
+    const h=terrainH(x,z);
+    if(h<0.4) continue;
+    const g=new THREE.Group(); g.position.set(x,h,z);
+    const bc=new THREE.Color(0x2f6b2a); bc.offsetHSL(rand(-0.02,0.03),rand(-0.05,0.08),rand(-0.04,0.04));
+    const bm=new THREE.MeshStandardMaterial({color:bc,roughness:1});
+    const nb=2+Math.floor(Math.random()*2);
+    for(let i=0;i<nb;i++){
+      const b=new THREE.Mesh(new THREE.SphereGeometry(rand(0.45,0.85),7,5),bm);
+      b.position.set(rand(-0.5,0.5),rand(0.15,0.5),rand(-0.5,0.5));
+      b.scale.y=0.75;
+      g.add(b);
+    }
+    brWorld.add(g);
+    gb++;
+  }
+  /* grass tufts: a couple of instanced draw calls for the whole island */
+  const grassPts=[];
+  let tries2=0;
+  while(grassPts.length<650&&tries2<4000){
+    tries2++;
+    const x=rand(-BR_WORLD_R*0.92,BR_WORLD_R*0.92),z=rand(-BR_WORLD_R*0.92,BR_WORLD_R*0.92);
+    if(terrainH(x,z)<0.35) continue;
+    grassPts.push([x,z]);
+  }
+  if(grassPts.length&&THREE.InstancedMesh&&THREE.Matrix4){
+    const gg=new THREE.ConeGeometry(0.09,0.55,3);
+    const gmat=new THREE.MeshStandardMaterial({color:0x6fae4b,roughness:1});
+    const ginst=new THREE.InstancedMesh(gg,gmat,grassPts.length);
+    const m4=new THREE.Matrix4();
+    for(let i=0;i<grassPts.length;i++){
+      const [x,z]=grassPts[i];
+      m4.makeScale(1,rand(0.7,1.6),1);
+      m4.setPosition(x,terrainH(x,z)+0.2,z);
+      ginst.setMatrixAt(i,m4);
+    }
+    ginst.frustumCulled=false;
+    brWorld.add(ginst);
   }
 }
 
@@ -4717,6 +4901,7 @@ function updateStorm(dt){
     brStormMesh.position.set(s.cx,110,s.cz);
     const rr=Math.max(s.r,0.6);
     brStormMesh.scale.set(rr,1,rr);
+    brStormMesh.visible=s.r<299; // hide the giant open circle until phase 1
   }
   s.tick-=dt;
   if(s.tick<=0){
@@ -4763,6 +4948,12 @@ function makeLootMesh(item,pos){
   glow.scale.set(1.8,1.8,1);
   glow.position.y=0.4;
   g.add(glow);
+  if(item.kind==='weapon'){
+    const beam=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,3.6,6,1,true),
+      new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.30,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide}));
+    beam.position.y=2.0;
+    g.add(beam);
+  }
   const th=terrainH(pos.x,pos.z);
   g.position.set(pos.x,th,pos.z);
   return g;
@@ -4812,6 +5003,10 @@ function spawnChest(pos){
   const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex(),color:0xffd447,transparent:true,opacity:0.7,depthWrite:false}));
   glow.scale.set(2.6,2.6,1); glow.position.y=0.8;
   g.add(glow);
+  const beam=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,4.5,8,1,true),
+    new THREE.MeshBasicMaterial({color:0xffd447,transparent:true,opacity:0.30,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide}));
+  beam.position.y=2.6;
+  g.add(beam);
   const th=terrainH(pos.x,pos.z);
   g.position.set(pos.x,th,pos.z);
   brWorld.add(g);
@@ -4994,6 +5189,12 @@ function updateVM(){
     show=vmFor(curWDef());
   }
   for(const k in all) if(all[k]) all[k].visible=(all[k]===show);
+  if(show){
+    if(show.userData.baseY===undefined) show.userData.baseY=show.position.y;
+    const raise=clamp(player.equipTimer/0.35,0,1);
+    show.position.y=show.userData.baseY-raise*0.3;
+    show.rotation.x=raise*0.45;
+  }
 }
 
 /* ---------------- BR DOM refs ---------------- */
@@ -5092,6 +5293,7 @@ function spawnBRBots(n){
       group, bar
     };
     brWorld.add(group);
+    b.group.scale.setScalar(0.94+Math.random()*0.12);
     brBots.push(b);
     brRoster.push(b);
   }
@@ -5117,7 +5319,7 @@ function brBotShoot(b,foe){
   if(!botHasLOS(eye,tgt)) return false;
   const base=tgt.clone().sub(eye).normalize();
   const dist=eye.distanceTo(tgt);
-  const err=clamp(dist*0.009,0.04,0.2);
+  const err=clamp(dist*0.004,0.015,0.08);
   base.x+=rand(-err,err); base.y+=rand(-err,err)*0.6; base.z+=rand(-err,err);
   base.normalize();
   b.lastShotAt=clock;
@@ -5238,7 +5440,8 @@ function brBotThink(b){
 }
 function updateBRBot(b,dt){
   if(b.state==='bus'){
-    if(brBus&&brBus.t>=b.dropAt*brBus.len){
+    // Bots jump only once the bus is over land; dropAt staggers them along the route.
+    if(brBus&&brBus.t>=b.dropAt*brBus.len&&terrainH(brBus.mesh.position.x,brBus.mesh.position.z)>=0.5){
       b.state='drop';
       b.group.visible=true;
       b.bar.spr.visible=true;
@@ -5311,7 +5514,7 @@ function updateBRBot(b,dt){
 function botConsumeNearby(b){
   if(!b.seekTarget) return;
   const t=b.seekTarget;
-  if(t.kind==='chest'&&!t.c.dead&&distToPlayer(t.c.pos)>=0&&Math.hypot(t.c.pos.x-b.pos.x,t.c.pos.z-b.pos.z)<2.4){
+  if(t.kind==='chest'&&!t.c.dead&&Math.hypot(t.c.pos.x-b.pos.x,t.c.pos.z-b.pos.z)<2.4){
     t.c.dead=true; t.c.group.visible=false;
     b.wdef=WTYPES[Object.keys(WTYPES)[Math.floor(Math.random()*6)]];
     b.rarity=randRarity(1); b.hasWeapon=true; b.heals+=1;
@@ -5379,8 +5582,10 @@ function startBus(){
   dropHintEl.style.display='block';
   showBanner('BATTLE BUS — JUMP WHEN READY','#ffd447',3);
 }
-function ejectPlayer(){
+function ejectPlayer(force){
   if(brPhase!=='bus'||!brBus) return;
+  // Fortnite-style: the bus only opens its doors once it is over playable ground.
+  if(!force&&terrainH(brBus.mesh.position.x,brBus.mesh.position.z)<0.5) return;
   brPhase='skydive';
   player.pos.copy(brBus.mesh.position).add(V(0,-4.5,0));
   player.vel.copy(brBus.dir).multiplyScalar(14);
@@ -5394,8 +5599,9 @@ function updateBus(dt){
   const p=V(brBus.from.x+brBus.dir.x*brBus.t,brBus.from.y,brBus.from.z+brBus.dir.z*brBus.t);
   brBus.mesh.position.copy(p);
   brBus.mesh.rotation.y=Math.atan2(-brBus.dir.x,-brBus.dir.z);
-  if(brBus.t>=brBus.len*0.72){
-    if(brPhase==='bus') ejectPlayer();
+  const overLand=terrainH(p.x,p.z)>=0.5;
+  if((brBus.t>=brBus.len*0.72&&overLand)||brBus.t>=brBus.len){
+    if(brPhase==='bus'){ ejectPlayer(true); brBus.mesh.visible=false; return; }
     for(const b of brBots){
       if(b.alive&&b.state==='bus'){
         b.state='drop';
@@ -5427,6 +5633,12 @@ function brAirUpdate(dt){
     if(isDown('back')) _wish.sub(_fwd);
     if(isDown('right')) _wish.add(_right);
     if(isDown('left')) _wish.sub(_right);
+    // Hard counter to "dropped over the ocean": auto-glide toward the island
+    // whenever the descent is above deep water.
+    if(terrainH(player.pos.x,player.pos.z)<0.25){
+      _wish.set(-player.pos.x,0,-player.pos.z);
+      if(_wish.lengthSq()>0) _wish.normalize();
+    }
     const spd=player.chute?12:22;
     if(_wish.lengthSq()>0){
       _wish.normalize();
@@ -5441,7 +5653,8 @@ function brAirUpdate(dt){
     player.vel.y=player.chute?lerp(player.vel.y,-8,1-Math.exp(-4*dt)):Math.max(player.vel.y-30*dt,-44);
     player.pos.addScaledVector(player.vel,dt);
     const th=terrainH(player.pos.x,player.pos.z);
-    if(!player.chute&&player.pos.y<th+42){
+    const chBase=Math.max(th,0);
+    if(!player.chute&&player.pos.y<chBase+42){
       player.chute=true;
       SFX.mantle();
     }
@@ -5599,11 +5812,16 @@ function brCleanup(){
 }
 
 /* ---------------- per-frame BR update ---------------- */
+function updateBrAmbient(){
+  if(brWaterMesh) brWaterMesh.position.y=-5+Math.sin(clock*0.8)*0.18;
+  if(brStormMesh) brStormMesh.material.opacity=0.16+0.06*(0.5+0.5*Math.sin(clock*2.2));
+}
 function brUpdate(dt){
   if(brPhase==='none') return;
   updateBus(dt);
   updateStorm(dt);
   updateLoot(dt);
+  updateBrAmbient();
   for(const b of brBots){
     if(!b.alive) continue;
     updateBRBot(b,dt);
@@ -5641,6 +5859,7 @@ function brHUD(){
   shNum.textContent=Math.ceil(clamp(player.shield,0,100));
   stNum.textContent=Math.ceil(clamp(player.stamina,0,100));
   matNum.textContent=getMats();
+  applyDamageVignette();
   if(matNameEl) matNameEl.textContent=MAT_STATS[buildMat].name;
   aliveNumEl.textContent=brAliveCount()+(player.alive?1:0);
   killNumEl.textContent=state.br?state.br.kills:0;
@@ -5724,6 +5943,20 @@ function brDrawMiniMap(){
     ctx.arc(mx(s.tx===0&&s.tz===0?0:s.tx),mz(s.tz),s.tr/W*size,0,Math.PI*2);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+  if((brPhase==='bus'||brPhase==='skydive')&&brBus){
+    ctx.strokeStyle='rgba(255,212,71,.7)';
+    ctx.lineWidth=1.5;
+    ctx.setLineDash([5,4]);
+    ctx.beginPath();
+    ctx.moveTo(mx(brBus.from.x),mz(brBus.from.z));
+    ctx.lineTo(mx(brBus.from.x+brBus.dir.x*brBus.len),mz(brBus.from.z+brBus.dir.z*brBus.len));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#ffd447';
+    ctx.beginPath();
+    ctx.arc(mx(brBus.mesh.position.x),mz(brBus.mesh.position.z),3.5,0,Math.PI*2);
+    ctx.fill();
   }
   const px=mx(player.pos.x),pz=mz(player.pos.z);
   const fx=-Math.sin(player.yaw),fz=-Math.cos(player.yaw);
